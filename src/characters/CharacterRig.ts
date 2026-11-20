@@ -569,6 +569,7 @@ export class CharacterRig {
     let hipsY = 0.92;
     let torsoX = 0;
     let torsoY = 0;
+    let headX = 0;
     let lArmX = 0;
     let rArmX = 0;
     let lArmZ = 0.12;
@@ -617,13 +618,34 @@ export class CharacterRig {
       lLegX = -0.35 - c * 0.45;
       rLegX = -0.35 + c * 0.45;
     } else if (state === 'swim') {
-      const s = Math.sin(this.animTime * 6.5);
-      hipsY = 0.7;
-      torsoX = 1.05;
-      lArmX = -1.6 + s * 0.8;
-      rArmX = -1.6 - s * 0.8;
-      lLegX = s * 0.55;
-      rLegX = -s * 0.55;
+      const moving = moveSpeedRatio > 0.08;
+      const freq = moving ? 6.8 : 2.6;
+      const s = Math.sin(this.animTime * freq);
+      const c = Math.cos(this.animTime * freq);
+      if (moving) {
+        hipsY = 0.76 + s * 0.03;
+        torsoX = 0.72;
+        headX = -0.58;
+        lArmX = -1.45 + s * 0.95;
+        rArmX = -1.45 - s * 0.95;
+        lArmZ = 0.35 + c * 0.25;
+        rArmZ = -0.35 - c * 0.25;
+        lLegX = s * 0.62;
+        rLegX = -s * 0.62;
+        capeX = 0.45;
+      } else {
+        // Upright buoyant water treading
+        hipsY = 0.78 + s * 0.05;
+        torsoX = 0.14;
+        headX = -0.1;
+        lArmX = -0.45 + s * 0.25;
+        rArmX = -0.45 - s * 0.25;
+        lArmZ = 0.65 + c * 0.22;
+        rArmZ = -0.65 - c * 0.22;
+        lLegX = s * 0.32;
+        rLegX = -s * 0.32;
+        capeX = 0.25;
+      }
     } else if (state === 'plunge') {
       torsoX = 0.45;
       rArmX = -2.2;
@@ -650,6 +672,7 @@ export class CharacterRig {
 
     this.hips.position.y += (hipsY - this.hips.position.y) * lerpRate;
     lerpRot(this.torso, torsoX, torsoY, 0);
+    lerpRot(this.headGroup, headX, 0, 0);
     lerpRot(this.leftArm, lArmX, 0, lArmZ);
     lerpRot(this.rightArm, rArmX, 0, rArmZ);
     lerpRot(this.leftLeg, lLegX, 0, 0);

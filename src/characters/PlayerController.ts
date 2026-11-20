@@ -1,8 +1,14 @@
 import * as THREE from 'three';
 import type { SoundEngine } from '../audio/SoundEngine';
 import type { InputManager } from '../core/InputManager';
-import type { AlternateSprintType, CylinderCollider, UpdraftVolume } from '../core/Types';
-import { getSurfaceType, getTerrainHeight, getTerrainNormal, WATER_Y, WORLD_HALF } from '../world/Terrain';
+import type { AlternateSprintType, BoxCollider, CollisionWorld, CylinderCollider, UpdraftVolume } from '../core/Types';
+import {
+  getSurfaceType,
+  getTerrainHeight,
+  getTerrainNormal,
+  getWaterSurfaceY,
+  WORLD_HALF,
+} from '../world/Terrain';
 import type { AnimState, CharacterRig } from './CharacterRig';
 
 export class PlayerController {
@@ -33,8 +39,10 @@ export class PlayerController {
   private shakeTimer = 0;
   private shakeStrength = 0;
   private footstepTimer = 0;
+  private swimRippleTimer = 0;
   private highestAirY = 0;
   private climbNormal = new THREE.Vector3(0, 0, 1);
+  public readonly lastDryPos = new THREE.Vector3(0, 6, 28);
 
   public activeRig: CharacterRig | null = null;
   public animStateOverride: AnimState | null = null;
@@ -48,18 +56,23 @@ export class PlayerController {
   public onFallDamage?: (dmg: number) => void;
   public onPlungeLand?: (pos: THREE.Vector3) => void;
   public onAltSprintExit?: (mode: AlternateSprintType, pos: THREE.Vector3) => void;
+  public onWaterRipple?: (x: number, y: number, z: number, fast: boolean) => void;
+  public onDrown?: () => void;
 
   constructor(private readonly camera: THREE.PerspectiveCamera, private readonly sound: SoundEngine) {
     this.position.y = getTerrainHeight(this.position.x, this.position.z);
     this.highestAirY = this.position.y;
+    this.lastDryPos.copy(this.position);
   }
 
   public teleport(x: number, z: number, yOffset = 0.5): void {
     const ground = getTerrainHeight(x, z);
-    this.position.set(x, Math.max(ground, WATER_Y) + yOffset, z);
+    const waterY = getWaterSurfaceY(x, z);
+    this.position.set(x, Math.max(ground, waterY) + yOffset, z);
     this.velocity.set(0, 0, 0);
     this.gliding = false;
     this.climbing = false;
+    this.swimming = false;
     this.plunging = false;
     this.altSprintActive = 'none';
     this.activeRig?.setAltSprintVisual('none');
@@ -82,7 +95,7 @@ export class PlayerController {
   public update(
     dt: number,
     input: InputManager,
-    colliders: CylinderCollider[],
+    collisionWorld: CollisionWorld,
     updrafts: UpdraftVolume[],
   ): void {
     if (this.iframeTimer > 0) this.iframeTimer -= dt;
@@ -139,42 +152,108 @@ export class PlayerController {
         this.facingAngle = Math.atan2(moveDir.x, moveDir.z);
       }
       const dir = this.getForwardDirection();
-      this.velocity.x = dir.x * 16.8;
-      this.velocity.z = dir.z * 16.8;
+      const dashSpd = this.swimming ? 10.5 : 16.8;
+      this.velocity.x = dir.x * dashSpd;
+      this.velocity.z = dir.z * dashSpd;
       this.sound.playDash();
     }
 
     this.sprinting = sprintHeld && hasMove && this.stamina > 2 && !this.gliding && !this.climbing;
 
+    const surfaceY = getWaterSurfaceY(this.position.x, this.position.z);
+    const groundY = getTerrainHeight(this.position.x, this.position.z);
+    const basinDepth = surfaceY - groundY;
+
+    // Remember last safe dry ground spot for drowning recovery
+    if (this.grounded && basinDepth < 0.2) {
+      this.lastDryPos.copy(this.position);
+    }
+
     // Alternate Sprint (Mona Illusory Torrent / Ayaka Frost Dash — skates right over water!)
     const prevAlt = this.altSprintActive;
-    const canAltSprint = rigAltSprint !== 'none' && this.sprinting && (this.grounded || this.position.y <= WATER_Y + 0.35);
+    const canAltSprint =
+      rigAltSprint !== 'none' &&
+      this.sprinting &&
+      (this.grounded || this.swimming || this.position.y <= surfaceY + 0.35);
     this.altSprintActive = canAltSprint ? rigAltSprint : 'none';
     this.activeRig?.setAltSprintVisual(this.altSprintActive);
     if (prevAlt !== 'none' && this.altSprintActive === 'none') {
       this.onAltSprintExit?.(prevAlt, this.position.clone());
     }
 
-    const groundY = getTerrainHeight(this.position.x, this.position.z);
-    const waterDepth = WATER_Y - this.position.y;
-    this.swimming = this.altSprintActive === 'none' && waterDepth > 1.05 && !this.climbing;
+    // Swimming state entry & exit with clean hysteresis (works in Starfell Lake, Ocean, AND Statue Pool!)
+    if (this.altSprintActive !== 'none' || this.climbing) {
+      this.swimming = false;
+    } else if (!this.swimming) {
+      if (basinDepth > 0.92 && this.position.y <= surfaceY - 0.65) {
+        this.swimming = true;
+        this.grounded = false;
+        this.gliding = false;
+        this.plunging = false;
+        this.sound.playFootstep('water');
+        this.onWaterRipple?.(this.position.x, surfaceY + 0.05, this.position.z, true);
+      }
+    } else {
+      // Remain swimming until reaching shallow water near shore
+      if (basinDepth < 0.8) {
+        this.swimming = false;
+        this.position.y = Math.max(this.position.y, groundY);
+        this.grounded = true;
+      }
+    }
 
     if (this.swimming) {
+      this.grounded = false;
       this.gliding = false;
       this.plunging = false;
-      const speed = this.sprinting ? 6.8 : 4.2;
+      const fastSwim = this.sprinting && this.stamina > 2;
+      const speed = fastSwim ? 6.8 : 4.2;
+
       if (hasMove && this.actionLockTimer <= 0) {
-        this.velocity.x = moveDir.x * speed;
-        this.velocity.z = moveDir.z * speed;
+        this.velocity.x = THREE.MathUtils.lerp(this.velocity.x, moveDir.x * speed, dt * 10);
+        this.velocity.z = THREE.MathUtils.lerp(this.velocity.z, moveDir.z * speed, dt * 10);
         this.facingAngle = this.lerpAngle(this.facingAngle, Math.atan2(moveDir.x, moveDir.z), dt * 10);
+        this.consumeStamina((fastSwim ? 16 : 6.2) * dt);
       } else {
-        this.velocity.x *= Math.exp(-8 * dt);
-        this.velocity.z *= Math.exp(-8 * dt);
+        this.velocity.x *= Math.exp(-7 * dt);
+        this.velocity.z *= Math.exp(-7 * dt);
       }
-      this.position.y = THREE.MathUtils.lerp(this.position.y, WATER_Y - 1.12, dt * 8);
       this.velocity.y = 0;
-      if (hasMove) this.consumeStamina((this.sprinting ? 17 : 7) * dt);
-      if (groundY > WATER_Y - 0.95) this.swimming = false;
+
+      // Apply horizontal swim movement!
+      this.position.addScaledVector(this.velocity, dt);
+
+      // Re-sample water & floor at new swimming position
+      const nextSurfaceY = getWaterSurfaceY(this.position.x, this.position.z);
+      const nextGroundY = getTerrainHeight(this.position.x, this.position.z);
+      const nextDepth = nextSurfaceY - nextGroundY;
+
+      // Keep character's head & shoulders floating naturally at water line
+      const targetSwimY = Math.max(nextGroundY, nextSurfaceY - 0.9);
+      this.position.y = THREE.MathUtils.lerp(this.position.y, targetSwimY, dt * 10);
+
+      // Periodic water ripples & splash audio
+      this.swimRippleTimer -= dt * (fastSwim ? 2.2 : hasMove ? 1.4 : 0.65);
+      if (this.swimRippleTimer <= 0) {
+        this.swimRippleTimer = 0.45;
+        this.onWaterRipple?.(this.position.x, nextSurfaceY + 0.05, this.position.z, fastSwim);
+        if (hasMove) this.sound.playFootstep('water');
+      }
+
+      // Smoothly step out onto shore or hop out with Space when near bank
+      if (nextDepth < 0.82) {
+        this.swimming = false;
+        this.position.y = nextGroundY;
+        this.grounded = true;
+      } else if (input.wasKeyPressed('Space') && nextDepth < 1.35) {
+        this.swimming = false;
+        this.velocity.y = 7.6;
+        this.position.y = nextSurfaceY - 0.3;
+      } else if (this.stamina <= 0.1) {
+        // Out of stamina in deep water -> return safely to last dry shore!
+        this.swimming = false;
+        this.onDrown?.();
+      }
     } else if (this.climbing) {
       this.gliding = false;
       const climbSpeed = 4.6;
@@ -286,12 +365,20 @@ export class PlayerController {
       this.position.addScaledVector(this.velocity, dt);
 
       const rawGround = getTerrainHeight(this.position.x, this.position.z);
-      // Mona & Ayaka sprint skates smoothly across water surface!
-      const effectiveFloor = this.altSprintActive !== 'none' ? Math.max(rawGround, WATER_Y + 0.05) : rawGround;
+      const supportTop = this.getWalkableSupportY(
+        this.position.x,
+        this.position.z,
+        this.position.y,
+        collisionWorld,
+      );
+      const solidGround = Math.max(rawGround, supportTop);
+      const localWaterY = getWaterSurfaceY(this.position.x, this.position.z);
+      // Mona & Ayaka sprint skates smoothly across BOTH Starfell Lake & Statue Pool!
+      const effectiveFloor = this.altSprintActive !== 'none' ? Math.max(solidGround, localWaterY + 0.05) : solidGround;
       const nextNormal = getTerrainNormal(this.position.x, this.position.z, this.tmpNormal);
 
       if (this.position.y <= effectiveFloor + 0.08 && this.velocity.y <= 0.5) {
-        if (!this.grounded && nextNormal.y < 0.56 && hasMove && this.stamina > 12 && this.altSprintActive === 'none') {
+        if (!this.grounded && nextNormal.y < 0.56 && supportTop < rawGround + 0.05 && hasMove && this.stamina > 12 && this.altSprintActive === 'none') {
           this.climbing = true;
           this.climbNormal.copy(nextNormal);
           this.facingAngle = Math.atan2(-nextNormal.x, -nextNormal.z);
@@ -315,6 +402,7 @@ export class PlayerController {
         this.grounded = false;
         if (
           nextNormal.y < 0.55 &&
+          supportTop < rawGround + 0.05 &&
           this.position.y - rawGround < 1.1 &&
           hasMove &&
           this.stamina > 15 &&
@@ -327,22 +415,8 @@ export class PlayerController {
       }
     }
 
-    // Iterative cylinder collision push-out
-    const pRadius = 0.45;
-    for (let i = 0; i < colliders.length; i++) {
-      const c = colliders[i];
-      if (this.position.y < c.minY || this.position.y > c.maxY) continue;
-      const dx = this.position.x - c.x;
-      const dz = this.position.z - c.z;
-      const minD = c.radius + pRadius;
-      const dSq = dx * dx + dz * dz;
-      if (dSq < minD * minD && dSq > 1e-6) {
-        const d = Math.sqrt(dSq);
-        const push = (minD - d) / d;
-        this.position.x += dx * push;
-        this.position.z += dz * push;
-      }
-    }
+    // Multi-pass solid cylinder & oriented-box collision resolution with smooth wall sliding
+    this.resolveSolidCollisions(collisionWorld);
 
     const bound = WORLD_HALF - 14;
     this.position.x = Math.max(-bound, Math.min(bound, this.position.x));
@@ -350,7 +424,7 @@ export class PlayerController {
 
     if (this.staminaRegenDelay > 0) {
       this.staminaRegenDelay -= dt;
-    } else if (this.grounded || (!this.gliding && !this.climbing && !this.sprinting)) {
+    } else if (!this.swimming && (this.grounded || (!this.gliding && !this.climbing && !this.sprinting))) {
       this.stamina = Math.min(this.maxStamina, this.stamina + 38 * dt);
     }
 
@@ -446,6 +520,131 @@ export class PlayerController {
 
     this.camera.position.lerp(camPos, Math.min(1, dt * 18));
     this.camera.lookAt(targetPos);
+  }
+
+  private getWalkableSupportY(x: number, z: number, curY: number, world: CollisionWorld): number {
+    let topY = -9999;
+    const stepHeight = 0.85;
+    const footPad = 0.22;
+
+    for (let i = 0; i < world.cylinders.length; i++) {
+      const c = world.cylinders[i];
+      if (!c.walkableTop) continue;
+      if (curY + stepHeight < c.maxY) continue;
+      const dx = x - c.x;
+      const dz = z - c.z;
+      const r = c.radius + footPad;
+      if (dx * dx + dz * dz <= r * r && c.maxY > topY) {
+        topY = c.maxY;
+      }
+    }
+
+    for (let i = 0; i < world.boxes.length; i++) {
+      const b = world.boxes[i];
+      if (!b.walkableTop) continue;
+      if (curY + stepHeight < b.maxY) continue;
+      const dx = x - b.x;
+      const dz = z - b.z;
+      const cos = Math.cos(b.rotY);
+      const sin = Math.sin(b.rotY);
+      const lx = dx * cos - dz * sin;
+      const lz = dx * sin + dz * cos;
+      if (Math.abs(lx) <= b.halfW + footPad && Math.abs(lz) <= b.halfD + footPad && b.maxY > topY) {
+        topY = b.maxY;
+      }
+    }
+    return topY;
+  }
+
+  private resolveSolidCollisions(world: CollisionWorld): void {
+    const pRadius = 0.45;
+    const pHeight = 1.7;
+    const stepClearance = 0.72;
+
+    for (let iter = 0; iter < 3; iter++) {
+      // 1. Solid Cylinder Colliders
+      for (let i = 0; i < world.cylinders.length; i++) {
+        const c = world.cylinders[i];
+        if (this.position.y + pHeight <= c.minY) continue;
+        // Allow stepping smoothly onto walkable tops
+        const topCutoff = c.walkableTop ? c.maxY - stepClearance : c.maxY - 0.1;
+        if (this.position.y >= topCutoff) continue;
+
+        const dx = this.position.x - c.x;
+        const dz = this.position.z - c.z;
+        const minD = c.radius + pRadius;
+        const dSq = dx * dx + dz * dz;
+        if (dSq < minD * minD) {
+          const d = Math.sqrt(dSq);
+          const nx = d > 1e-5 ? dx / d : 1;
+          const nz = d > 1e-5 ? dz / d : 0;
+          const overlap = minD - d;
+          this.position.x += nx * overlap;
+          this.position.z += nz * overlap;
+          // Slide velocity cleanly along obstacle tangent
+          const vn = this.velocity.x * nx + this.velocity.z * nz;
+          if (vn < 0) {
+            this.velocity.x -= nx * vn;
+            this.velocity.z -= nz * vn;
+          }
+        }
+      }
+
+      // 2. Oriented Box Colliders (cottages, bridge walls, domain pillars)
+      for (let i = 0; i < world.boxes.length; i++) {
+        const b: BoxCollider = world.boxes[i];
+        if (this.position.y + pHeight <= b.minY) continue;
+        const topCutoff = b.walkableTop ? b.maxY - stepClearance : b.maxY - 0.1;
+        if (this.position.y >= topCutoff) continue;
+
+        const dx = this.position.x - b.x;
+        const dz = this.position.z - b.z;
+        const cos = Math.cos(b.rotY);
+        const sin = Math.sin(b.rotY);
+        const lx = dx * cos - dz * sin;
+        const lz = dx * sin + dz * cos;
+
+        const cx = Math.max(-b.halfW, Math.min(b.halfW, lx));
+        const cz = Math.max(-b.halfD, Math.min(b.halfD, lz));
+        const rx = lx - cx;
+        const rz = lz - cz;
+        const distSq = rx * rx + rz * rz;
+
+        if (distSq < pRadius * pRadius) {
+          let pushLX = 0;
+          let pushLZ = 0;
+          if (distSq > 1e-6) {
+            const dist = Math.sqrt(distSq);
+            const overlap = pRadius - dist;
+            pushLX = (rx / dist) * overlap;
+            pushLZ = (rz / dist) * overlap;
+          } else {
+            // Inside box center -> push out along shortest axis
+            const penX = b.halfW + pRadius - Math.abs(lx);
+            const penZ = b.halfD + pRadius - Math.abs(lz);
+            if (penX < penZ) pushLX = lx >= 0 ? penX : -penX;
+            else pushLZ = lz >= 0 ? penZ : -penZ;
+          }
+
+          // Transform push back into world space (Three.js +rotY around +Y)
+          const wx = pushLX * cos + pushLZ * sin;
+          const wz = -pushLX * sin + pushLZ * cos;
+          this.position.x += wx;
+          this.position.z += wz;
+
+          const pLen = Math.hypot(wx, wz);
+          if (pLen > 1e-5) {
+            const nx = wx / pLen;
+            const nz = wz / pLen;
+            const vn = this.velocity.x * nx + this.velocity.z * nz;
+            if (vn < 0) {
+              this.velocity.x -= nx * vn;
+              this.velocity.z -= nz * vn;
+            }
+          }
+        }
+      }
+    }
   }
 
   private lerpAngle(a: number, b: number, t: number): number {

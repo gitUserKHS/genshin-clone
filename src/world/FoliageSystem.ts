@@ -494,7 +494,14 @@ export class FoliageSystem {
 
       col.setHex(0x7c8a96).offsetHSL(0, 0, (rand() - 0.5) * 0.1);
       rocks.setColorAt(count, col);
-      this.colliders.push({ x, z, radius: Math.max(sx, sz) * 1.25, minY: y - 1, maxY: y + sy * 1.8 });
+      this.colliders.push({
+        x,
+        z,
+        radius: Math.max(sx, sz) * 1.32,
+        minY: y - 1,
+        maxY: y + sy * 1.55,
+        walkableTop: true,
+      });
       count++;
     }
 

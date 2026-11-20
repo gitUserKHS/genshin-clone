@@ -1,5 +1,11 @@
 import * as THREE from 'three';
-import { ELEMENT_COLORS, type ActiveChallengeHUD, type ElementType, type InteractablePrompt } from '../core/Types';
+import {
+  ELEMENT_COLORS,
+  type ActiveChallengeHUD,
+  type CylinderCollider,
+  type ElementType,
+  type InteractablePrompt,
+} from '../core/Types';
 import { createToonGradientMap } from './FoliageSystem';
 import { DOMAIN_GATE_POS } from './Landmarks';
 import { getTerrainHeight, WATER_Y, WORLD_LANDMARKS } from './Terrain';
@@ -261,6 +267,33 @@ export class WorldInteractables {
       progress: active.collectedCount,
       target: active.orbCoords.length,
     };
+  }
+
+  public getDynamicColliders(): CylinderCollider[] {
+    const out: CylinderCollider[] = [];
+    for (const wp of this.waypoints) {
+      out.push({ x: wp.x, z: wp.z, radius: 0.95, minY: wp.y - 0.5, maxY: wp.y + 3.0 });
+    }
+    for (const ch of this.chests) {
+      if (ch.hiddenUntilUnlocked) continue;
+      out.push({ x: ch.x, z: ch.z, radius: 0.62, minY: ch.y - 0.3, maxY: ch.y + 0.95, walkableTop: true });
+    }
+    for (const m of this.monuments) {
+      out.push({ x: m.x, z: m.z, radius: 0.62, minY: m.y - 0.5, maxY: m.y + 2.8 });
+    }
+    for (const s of this.seelies) {
+      const end = s.waypoints[s.waypoints.length - 1];
+      const cy = getTerrainHeight(end[0], end[1]);
+      out.push({ x: end[0], z: end[1], radius: 0.65, minY: cy - 0.5, maxY: cy + 1.45, walkableTop: true });
+    }
+    for (const ore of this.crystalOres) {
+      if (ore.broken) continue;
+      out.push({ x: ore.x, z: ore.z, radius: 0.7, minY: ore.y - 0.3, maxY: ore.y + 1.25 });
+    }
+    for (const f of this.cookingFires) {
+      out.push({ x: f.x, z: f.z, radius: 0.58, minY: f.y - 0.3, maxY: f.y + 1.25 });
+    }
+    return out;
   }
 
   public tryHitMonument(pos: THREE.Vector3, radius: number, element: ElementType, onLit: (m: MonumentNode, solved: boolean) => void): void {

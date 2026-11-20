@@ -178,6 +178,23 @@ export interface CylinderCollider {
   radius: number;
   minY: number;
   maxY: number;
+  walkableTop?: boolean;
+}
+
+export interface BoxCollider {
+  x: number;
+  z: number;
+  halfW: number;
+  halfD: number;
+  rotY: number;
+  minY: number;
+  maxY: number;
+  walkableTop?: boolean;
+}
+
+export interface CollisionWorld {
+  cylinders: CylinderCollider[];
+  boxes: BoxCollider[];
 }
 
 export interface UpdraftVolume {

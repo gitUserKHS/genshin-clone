@@ -203,6 +203,16 @@ export class GameEngine {
       if (res.switchedTo) this.applyActiveRig(res.switchedTo);
       else if (res.died) this.reviveAtStatue();
     };
+    this.player.onWaterRipple = (x, y, z, fast) => {
+      this.vfx.spawnWaterRipple(x, y, z, fast ? 1.45 : 1.0);
+    };
+    this.player.onDrown = () => {
+      const active = this.progression.getActiveCharacter();
+      this.progression.damageActiveCharacter(Math.round(active.maxHp * 0.1));
+      this.player.stamina = this.player.maxStamina * 0.45;
+      this.player.teleport(this.player.lastDryPos.x, this.player.lastDryPos.z, 0.3);
+      this.hud.showToast('스태미나 부족!', '안전한 육지로 복귀했습니다.');
+    };
 
     // 6. UI Layers
     this.warpFade = document.createElement('div');
@@ -493,7 +503,41 @@ export class GameEngine {
         this.progression.tickBuffs(dt);
         this.player.activeRig?.setShieldVisual(this.progression.shield?.element ?? null);
 
-        this.player.update(dt, this.input, this.landmarks.colliders, this.landmarks.updrafts);
+        // Combine ALL solid static + dynamic world colliders (trees, boulders, landmarks, interactables, Zhongli stele, enemies)
+        const dynamicCylinders = [
+          ...this.foliage.colliders,
+          ...this.landmarks.colliders,
+          ...this.interactables.getDynamicColliders(),
+        ];
+        for (const ent of this.vfx.activeEntities) {
+          if (ent.kind === 'zhongli_stele') {
+            dynamicCylinders.push({
+              x: ent.pos.x,
+              z: ent.pos.z,
+              radius: 0.58,
+              minY: ent.pos.y - 0.5,
+              maxY: ent.pos.y + 5.2,
+              walkableTop: true,
+            });
+          }
+        }
+        for (const en of this.enemies.enemies) {
+          if (!en.alive) continue;
+          dynamicCylinders.push({
+            x: en.pos.x,
+            z: en.pos.z,
+            radius: en.radius * 0.82,
+            minY: en.pos.y - 0.5,
+            maxY: en.pos.y + en.height,
+          });
+        }
+
+        this.player.update(
+          dt,
+          this.input,
+          { cylinders: dynamicCylinders, boxes: this.landmarks.boxColliders },
+          this.landmarks.updrafts,
+        );
         this.combat.update(dt, this.input);
 
         const activeCamps = this.enemies.getActiveCampIds();
@@ -589,6 +633,7 @@ export class GameEngine {
             if (res.switchedTo) this.applyActiveRig(res.switchedTo);
             else if (res.died) this.reviveAtStatue();
           },
+          [...this.foliage.colliders, ...this.landmarks.colliders],
         );
         this.sound.setInCombat(anyInCombat);
 

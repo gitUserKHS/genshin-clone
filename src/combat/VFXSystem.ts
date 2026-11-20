@@ -137,6 +137,30 @@ export class VFXSystem {
     });
   }
 
+  public spawnWaterRipple(x: number, y: number, z: number, scale = 1.0): void {
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xd8faff,
+      transparent: true,
+      opacity: 0.72,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.28, 0.42, 24), mat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(x, y, z);
+    this.scene.add(ring);
+
+    this.effects.push({
+      mesh: ring,
+      age: 0,
+      maxAge: 0.65,
+      onUpdate: (_dt, t) => {
+        ring.scale.setScalar((0.8 + t * 2.6) * scale);
+        mat.opacity = 0.72 * (1 - t);
+      },
+    });
+  }
+
   public spawnElementalSightPulse(pos: THREE.Vector3): void {
     const mat = new THREE.MeshBasicMaterial({
       color: 0x80ecff,

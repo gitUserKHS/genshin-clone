@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { CylinderCollider, UpdraftVolume } from '../core/Types';
+import type { BoxCollider, CylinderCollider, UpdraftVolume } from '../core/Types';
 import { createToonGradientMap } from './FoliageSystem';
 import { getTerrainHeight, WORLD_LANDMARKS } from './Terrain';
 
@@ -29,6 +29,7 @@ void main() {
 
 export class Landmarks {
   public readonly colliders: CylinderCollider[] = [];
+  public readonly boxColliders: BoxCollider[] = [];
   public readonly updrafts: UpdraftVolume[] = [];
 
   private statueCrystal!: THREE.Mesh;
@@ -104,16 +105,18 @@ export class Landmarks {
       roughness: 0.18,
     });
 
-    // Stepped circular stone plaza
+    // Stepped circular stone plaza (walkable steps!)
     const base1 = new THREE.Mesh(new THREE.CylinderGeometry(8.4, 9.0, 0.65, 28), stoneMat);
     base1.position.y = 0.25;
     base1.receiveShadow = true;
     group.add(base1);
+    this.colliders.push({ x: sx, z: sz, radius: 8.6, minY: sy - 0.5, maxY: sy + 0.58, walkableTop: true });
 
     const base2 = new THREE.Mesh(new THREE.CylinderGeometry(4.8, 5.4, 0.85, 24), stoneMat);
     base2.position.y = 0.9;
     base2.receiveShadow = true;
     group.add(base2);
+    this.colliders.push({ x: sx, z: sz, radius: 5.0, minY: sy + 0.4, maxY: sy + 1.32, walkableTop: true });
 
     // Ornate glowing Anemo rune rings on plaza floor
     const ring = new THREE.Mesh(new THREE.RingGeometry(5.6, 6.05, 40), tealGlowMat);
@@ -193,7 +196,7 @@ export class Landmarks {
       this.colliders.push({ x: sx + px, z: sz + pz, radius: 0.65, minY: sy, maxY: sy + 5.5 });
     }
 
-    // Southern stone bridge balustrades
+    // Southern stone bridge balustrades (with solid BoxColliders!)
     for (const side of [-3.35, 3.35]) {
       const post = new THREE.Mesh(new THREE.BoxGeometry(0.68, 1.35, 14.5), stoneMat);
       post.position.set(side, 0.28, 15.5);
@@ -203,9 +206,20 @@ export class Landmarks {
       const rail = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.16, 14.6), goldMat);
       rail.position.set(side, 0.98, 15.5);
       group.add(rail);
+
+      this.boxColliders.push({
+        x: sx + side,
+        z: sz + 15.5,
+        halfW: 0.4,
+        halfD: 7.3,
+        rotY: 0,
+        minY: sy - 0.5,
+        maxY: sy + 1.1,
+        walkableTop: true,
+      });
     }
 
-    this.colliders.push({ x: sx, z: sz, radius: 2.3, minY: sy, maxY: sy + 9 });
+    this.colliders.push({ x: sx, z: sz, radius: 2.25, minY: sy, maxY: sy + 9 });
     scene.add(group);
   }
 
@@ -307,7 +321,15 @@ export class Landmarks {
       }
 
       group.add(house);
-      this.colliders.push({ x: wx + ox, z: wz + oz, radius: 3.3, minY: cy, maxY: cy + 6 });
+      this.boxColliders.push({
+        x: wx + ox,
+        z: wz + oz,
+        halfW: 2.85,
+        halfD: 2.45,
+        rotY,
+        minY: cy - 0.5,
+        maxY: cy + 5.5,
+      });
     });
 
     scene.add(group);
@@ -377,7 +399,8 @@ export class Landmarks {
       roughness: 0.25,
     });
 
-    // Twin towering Genshin Domain pillars & golden archway
+    // Twin towering Genshin Domain pillars & golden archway (with exact rotated BoxColliders!)
+    const rotY = 0.55;
     for (const s of [-3.2, 3.2]) {
       const col = new THREE.Mesh(new THREE.BoxGeometry(1.4, 8.2, 1.4), stoneMat);
       col.position.set(s, 4.1, 0);
@@ -387,6 +410,19 @@ export class Landmarks {
       const trim = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.45, 1.6), goldMat);
       trim.position.set(s, 8.2, 0);
       group.add(trim);
+
+      // Transform local pillar center (s, 0) by group rotationY
+      const wxCol = dx + s * Math.cos(rotY);
+      const wzCol = dz - s * Math.sin(rotY);
+      this.boxColliders.push({
+        x: wxCol,
+        z: wzCol,
+        halfW: 0.78,
+        halfD: 0.78,
+        rotY,
+        minY: dy - 0.5,
+        maxY: dy + 8.5,
+      });
     }
 
     const lintel = new THREE.Mesh(new THREE.BoxGeometry(8.6, 1.2, 1.6), stoneMat);
@@ -446,6 +482,7 @@ export class Landmarks {
       bulb.position.set(0.7, 3.25, 0);
       lamp.add(bulb);
 
+      this.colliders.push({ x, z, radius: 0.22, minY: y - 0.5, maxY: y + 3.8 });
       scene.add(lamp);
     }
   }

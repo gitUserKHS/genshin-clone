@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {
   ELEMENT_COLORS,
   type ActiveChallengeHUD,
+  type CylinderCollider,
   type ElementalAura,
   type ElementType,
   type EnemySnapshot,
@@ -374,6 +375,7 @@ export class EnemySystem {
     playerPos: THREE.Vector3,
     tauntTargetPos: THREE.Vector3 | null,
     onDamagePlayer: (dmg: number, sourcePos: THREE.Vector3) => void,
+    obstacleColliders: CylinderCollider[] = [],
   ): { anyInCombat: boolean } {
     this.elapsed += dt;
     let anyInCombat = false;
@@ -541,6 +543,23 @@ export class EnemySystem {
       if (e.vel.lengthSq() > 0.01) {
         e.pos.addScaledVector(e.vel, dt);
         e.vel.multiplyScalar(Math.exp(-7 * dt));
+      }
+
+      // Push enemies cleanly out of trees, rocks, and landmark pillars
+      for (let cIdx = 0; cIdx < obstacleColliders.length; cIdx++) {
+        const c = obstacleColliders[cIdx];
+        if (c.walkableTop && c.maxY - e.pos.y < 1.0) continue;
+        if (e.pos.y + e.height < c.minY || e.pos.y > c.maxY) continue;
+        const dx = e.pos.x - c.x;
+        const dz = e.pos.z - c.z;
+        const minD = c.radius + e.radius;
+        const dSq = dx * dx + dz * dz;
+        if (dSq < minD * minD && dSq > 1e-6) {
+          const d = Math.sqrt(dSq);
+          const push = (minD - d) / d;
+          e.pos.x += dx * push;
+          e.pos.z += dz * push;
+        }
       }
 
       const groundY = Math.max(WATER_Y - 0.5, getTerrainHeight(e.pos.x, e.pos.z));

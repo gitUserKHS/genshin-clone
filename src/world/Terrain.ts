@@ -5,6 +5,15 @@ import type { WorldPoint } from '../core/Types';
 export const WORLD_SIZE = 420;
 export const WORLD_HALF = WORLD_SIZE / 2;
 export const WATER_Y = -2.2;
+export const STATUE_POOL_Y = 5.52;
+
+export function getWaterSurfaceY(x: number, z: number): number {
+  const dStatue = Math.hypot(x, z + 24);
+  if (dStatue > 10.6 && dStatue < 19.6 && !(z > -24 && Math.abs(x) < 3.6)) {
+    return STATUE_POOL_Y;
+  }
+  return WATER_Y;
+}
 
 export const WORLD_LANDMARKS: Record<string, WorldPoint> = {
   spawn: { id: 'spawn', nameKr: '별이 떨어지는 산기슭', x: 0, z: 28, type: 'landmark' },
@@ -88,17 +97,17 @@ export function getTerrainHeight(x: number, z: number): number {
     h = lerp(h, 5.4, 1 - smoothstep(9, 22, dSpawn));
   }
 
-  // 2. Statue of The Seven (0, -24) -> central plateau y=6.0, ring reflecting pool y=5.15 at r=12..19
+  // 2. Statue of The Seven (0, -24) -> central plateau y=6.0, ring reflecting pool dipping to y=3.85 at r=12..19
   const dStatue = Math.hypot(x - 0, z + 24);
   if (dStatue < 30) {
     const outerBlend = 1 - smoothstep(20, 30, dStatue);
     let statueTarget = 6.0;
     if (dStatue > 11.2 && dStatue < 19.6) {
-      // Shallow reflecting pool except on southern stone causeway
+      // Swimmable reflecting pool except on southern stone causeway
       const isCauseway = z > -24 && Math.abs(x) < 3.6;
       if (!isCauseway) {
         const ringT = 1 - Math.abs(dStatue - 15.4) / 4.2;
-        statueTarget = 6.0 - 0.85 * Math.max(0, ringT);
+        statueTarget = 6.0 - 2.15 * Math.max(0, ringT);
       }
     }
     h = lerp(h, statueTarget, outerBlend);
@@ -160,7 +169,8 @@ export function getTerrainNormal(x: number, z: number, out = new THREE.Vector3()
 
 export function getSurfaceType(x: number, z: number): 'grass' | 'stone' | 'water' | 'sand' {
   const h = getTerrainHeight(x, z);
-  if (h < WATER_Y + 0.15) return 'water';
+  const waterY = getWaterSurfaceY(x, z);
+  if (h < waterY + 0.12) return 'water';
   const dStatue = Math.hypot(x, z + 24);
   if (dStatue < 12.2) return 'stone';
   if (dStatue < 20 && z > -24 && Math.abs(x) < 3.6) return 'stone';
